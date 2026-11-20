@@ -20,5 +20,5 @@ function renderWarehouse(){
  let activity=state.movements.filter(x=>!branchId||x.branch_id===branchId).slice(0,5);$('recentActivity').innerHTML=activity.map(x=>`<div class="activity-item"><span class="activity-dot ${x.kind==='Списание'?'writeoff':x.kind==='Продажа'?'sale':''}"></span><div><b>${esc(x.product)}</b><small>${esc(x.kind)} · ${esc(x.branch)} · ${Number(x.qty)} · ${esc(x.created_at.slice(0,16).replace('T',' '))}</small></div></div>`).join('')||'<p class="muted">Движений пока нет</p>';
 }
 $('stockMode').onclick=()=>{stockMode=stockMode==='low'?'all':'low';renderWarehouse()};
-</script></body></html>
+</script><script>(function(){function syncPanels(){var t=document.getElementById('pageTitle')?.textContent||'';document.body.classList.toggle('operations-view',t==='Продажи'||t==='Движения');document.body.classList.toggle('promotions-view',t==='Акции')}new MutationObserver(syncPanels).observe(document.getElementById('pageTitle'),{childList:true,characterData:true,subtree:true});syncPanels()})()</script></body></html>
 </body><script>(function(){function hideMixedQuantity(){document.querySelectorAll('#metrics .metric').forEach(function(card){if(card.textContent.includes('Количество на складе'))card.remove()})}new MutationObserver(hideMixedQuantity).observe(document.getElementById('metrics'),{childList:true});hideMixedQuantity()})()</script>
