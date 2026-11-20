@@ -1,0 +1,5 @@
+fish_demo.sqlite3
+fish_demo.sqlite3-*
+fish_price_demo.sqlite3
+fish_price_demo.sqlite3-*
+__pycache__/
