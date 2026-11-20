@@ -186,6 +186,29 @@ def save_promotion(data):
                                       (name,product,branch,start,end,min_qty,price,float(pct) if pct else None,int(data.get('active') is True))).lastrowid
         return {'promotion_id': promotion_id}
 
+def save_customer(data):
+    name, phone = str(data.get('name','')).strip(), str(data.get('phone','')).strip()
+    if not name or not phone or len(name) > 120 or len(phone) > 40:
+        raise ValueError('Укажите имя и телефон клиента')
+    group = int(data.get('group_id') or 1)
+    with connect() as db:
+        if not db.execute('SELECT 1 FROM customer_groups WHERE id=? AND active=1',(group,)).fetchone():
+            raise ValueError('Группа не найдена')
+        try:
+            cid=db.execute('INSERT INTO customers(name,phone,points,group_id) VALUES(?,?,0,?)',(name,phone,group)).lastrowid
+        except sqlite3.IntegrityError:
+            raise ValueError('Клиент с таким телефоном уже есть')
+        return {'customer_id':cid}
+
+def save_group(data):
+    gid=int(data.get('id') or 0); name=str(data.get('name','')).strip()
+    pct=Decimal(str(data.get('discount_pct',0))); spent=int(data.get('min_spent',0)); purchases=int(data.get('min_purchases',0))
+    if not gid or not name or pct<0 or pct>=100 or spent<0 or purchases<0: raise ValueError('Проверьте параметры группы')
+    with connect() as db:
+        if not db.execute('SELECT 1 FROM customer_groups WHERE id=?',(gid,)).fetchone(): raise ValueError('Группа не найдена')
+        db.execute('UPDATE customer_groups SET name=?,discount_pct=?,min_spent=?,min_purchases=? WHERE id=?',(name,float(pct),spent,purchases,gid))
+        return {'group_id':gid}
+
 
 def quote(data):
     branch, product = int(data['branch_id']), int(data['product_id'])
@@ -283,14 +306,15 @@ class Handler(BaseHTTPRequestHandler):
             self.send(404, {'error': 'Не найдено'})
 
     def do_POST(self):
-        if self.path not in ('/api/operation', '/api/promotions', '/api/quote'):
+        if self.path not in ('/api/operation', '/api/promotions', '/api/quote', '/api/customers', '/api/groups'):
             return self.send(404, {'error': 'Не найдено'})
         try:
             size = int(self.headers.get('Content-Length', '0'))
             if size < 1 or size > 10000:
                 raise ValueError('Неверный размер запроса')
             data = json.loads(self.rfile.read(size))
-            self.send(200, save_promotion(data) if self.path == '/api/promotions' else quote(data) if self.path == '/api/quote' else mutate(data))
+            action = save_promotion if self.path == '/api/promotions' else save_customer if self.path == '/api/customers' else save_group if self.path == '/api/groups' else quote if self.path == '/api/quote' else mutate
+            self.send(200, action(data))
         except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
             self.send(400, {'error': str(exc)})
 
