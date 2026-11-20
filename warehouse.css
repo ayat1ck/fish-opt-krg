@@ -38,6 +38,15 @@ body.promotions-view .layout>aside .panel:nth-child(2) .details summary{display:
   td{padding:10px 7px}
   body.stock-view #stockTable th:nth-child(2),body.stock-view #stockTable td:nth-child(2),body.stock-view #stockTable th:nth-child(4),body.stock-view #stockTable td:nth-child(4),body.stock-view #stockTable th:nth-child(5),body.stock-view #stockTable td:nth-child(5){display:none}
   body.stock-view #stockTable th:nth-child(1){width:65%}
+  body.stock-view #stockTable table{display:block}
+  body.stock-view #stockTable thead{display:none}
+  body.stock-view #stockTable tbody{display:grid;gap:0}
+  body.stock-view #stockTable tr{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:8px;padding:10px 8px;border-bottom:1px solid #edf1f3}
+  body.stock-view #stockTable tr:last-child{border-bottom:0}
+  body.stock-view #stockTable td{display:none;border:0;padding:0;min-width:0}
+  body.stock-view #stockTable td:nth-child(1),body.stock-view #stockTable td:nth-child(3),body.stock-view #stockTable td:nth-child(6){display:block}
+  body.stock-view #stockTable td:nth-child(3){font-weight:800;white-space:nowrap}
+  body.stock-view #stockTable td:nth-child(6){text-align:right}
   .product-title{font-size:10px;white-space:normal;line-height:1.25}
   .subline{font-size:8px}
   .qty{font-size:11px}
