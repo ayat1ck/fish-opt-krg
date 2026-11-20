@@ -41,7 +41,8 @@ def init():
         CREATE TABLE IF NOT EXISTS branches(id INTEGER PRIMARY KEY, name TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS products(id INTEGER PRIMARY KEY, category TEXT NOT NULL, name TEXT NOT NULL, unit TEXT NOT NULL, price INTEGER NOT NULL, cost INTEGER NOT NULL, barcode TEXT NOT NULL, ntin TEXT NOT NULL, weight_kg TEXT NOT NULL, country TEXT NOT NULL, promo_price TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS stock(branch_id INTEGER NOT NULL REFERENCES branches(id), product_id INTEGER NOT NULL REFERENCES products(id), qty REAL NOT NULL CHECK(qty >= 0), PRIMARY KEY(branch_id, product_id));
-        CREATE TABLE IF NOT EXISTS customers(id INTEGER PRIMARY KEY, name TEXT NOT NULL, phone TEXT UNIQUE NOT NULL, points INTEGER NOT NULL DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS customer_groups(id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, discount_pct REAL NOT NULL DEFAULT 0, min_spent INTEGER NOT NULL DEFAULT 0, min_purchases INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1);
+        CREATE TABLE IF NOT EXISTS customers(id INTEGER PRIMARY KEY, name TEXT NOT NULL, phone TEXT UNIQUE NOT NULL, points INTEGER NOT NULL DEFAULT 0, group_id INTEGER REFERENCES customer_groups(id));
         CREATE TABLE IF NOT EXISTS movements(id INTEGER PRIMARY KEY, created_at TEXT NOT NULL, branch_id INTEGER NOT NULL, product_id INTEGER NOT NULL, kind TEXT NOT NULL, qty REAL NOT NULL, unit_cost INTEGER NOT NULL, note TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS sales(id INTEGER PRIMARY KEY, request_id TEXT UNIQUE NOT NULL, created_at TEXT NOT NULL, branch_id INTEGER NOT NULL, product_id INTEGER NOT NULL, customer_id INTEGER, qty REAL NOT NULL, total INTEGER NOT NULL, earned INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS employees(id INTEGER PRIMARY KEY, name TEXT NOT NULL, branch_id INTEGER NOT NULL REFERENCES branches(id), role TEXT NOT NULL);
@@ -52,6 +53,12 @@ def init():
         for name, definition in [('base_total', 'INTEGER'), ('discount', 'INTEGER'), ('promotion_id', 'INTEGER')]:
             if name not in columns:
                 db.execute(f'ALTER TABLE sales ADD COLUMN {name} {definition}')
+        customer_columns = {row['name'] for row in db.execute('PRAGMA table_info(customers)')}
+        if 'group_id' not in customer_columns:
+            db.execute('ALTER TABLE customers ADD COLUMN group_id INTEGER')
+        if not db.execute('SELECT count(*) FROM customer_groups').fetchone()[0]:
+            db.executemany('INSERT INTO customer_groups(name,discount_pct,min_spent,min_purchases) VALUES(?,?,?,?)', [
+                ('Обычный', 0, 0, 0), ('Постоянный', 5, 100000, 5), ('VIP', 10, 500000, 15), ('Оптовик', 15, 1000000, 30)])
         if not db.execute('SELECT count(*) FROM branches').fetchone()[0]:
             db.executemany('INSERT INTO branches(name) VALUES(?)', [(x,) for x in BRANCHES])
             db.executemany('INSERT INTO products(category,name,unit,price,cost,barcode,ntin,weight_kg,country,promo_price) VALUES(?,?,?,?,?,?,?,?,?,?)', PRODUCTS)
@@ -75,6 +82,8 @@ def init():
             phone = f'+7700000{i:04}'
             if phone not in existing_phones:
                 db.execute('INSERT INTO customers(name,phone,points) VALUES(?,?,0)', (name+' (демо)',phone))
+        regular = db.execute("SELECT id FROM customer_groups WHERE name='Обычный'").fetchone()['id']
+        db.execute('UPDATE customers SET group_id=COALESCE(group_id,?)', (regular,))
         # Historical transactions are generated only for a fresh stand, so restarting never duplicates them.
         if not db.execute('SELECT count(*) FROM sales').fetchone()[0]:
             for day in range(10, 0, -1):
@@ -110,6 +119,7 @@ def snapshot():
             'products': rows(db, 'SELECT * FROM products'),
             'stock': rows(db, 'SELECT * FROM stock'),
             'customers': rows(db, 'SELECT * FROM customers'),
+            'customer_groups': rows(db, 'SELECT * FROM customer_groups WHERE active=1 ORDER BY min_spent, min_purchases'),
             'employees': rows(db, 'SELECT e.*,b.name branch FROM employees e JOIN branches b ON b.id=e.branch_id'),
             'suppliers': rows(db, 'SELECT * FROM suppliers'),
             'promotions': rows(db, 'SELECT a.*,p.name product,b.name branch FROM promotions a JOIN products p ON p.id=a.product_id LEFT JOIN branches b ON b.id=a.branch_id ORDER BY a.id DESC'),
@@ -125,19 +135,24 @@ def quantity(value):
     return float(q)
 
 
-def current_price(db, item, branch, qty, today=None):
+def current_price(db, item, branch, qty, customer_id=None, today=None):
     today = today or datetime.now(ZoneInfo('Asia/Almaty')).date().isoformat()
     base = Decimal(item['price'])
     gross = (base * Decimal(str(qty))).quantize(Decimal('1'), rounding=ROUND_HALF_UP)
     candidates = []
+    if customer_id:
+        group = db.execute('SELECT g.discount_pct,g.name FROM customers c JOIN customer_groups g ON g.id=c.group_id WHERE c.id=? AND g.active=1', (customer_id,)).fetchone()
+        if group and group['discount_pct'] > 0:
+            total = (base * Decimal(str(qty)) * (Decimal('1') - Decimal(str(group['discount_pct'])) / 100)).quantize(Decimal('1'), rounding=ROUND_HALF_UP)
+            candidates.append((int(total), None, group['name']))
     for rule in db.execute('SELECT * FROM promotions WHERE product_id=? AND active=1 AND (branch_id IS NULL OR branch_id=?) AND starts_on<=? AND ends_on>=? AND min_qty<=?',
                            (item['id'], branch, today, today, qty)):
         unit = Decimal(rule['promo_price']) if rule['promo_price'] is not None else base * (Decimal('1') - Decimal(str(rule['discount_pct'])) / 100)
         total = (unit * Decimal(str(qty))).quantize(Decimal('1'), rounding=ROUND_HALF_UP)
         if total < gross:
-            candidates.append((int(total), rule['id']))
-    final, promotion_id = min(candidates, default=(int(gross), None))
-    return {'base_total': int(gross), 'total': final, 'discount': int(gross) - final, 'promotion_id': promotion_id}
+            candidates.append((int(total), rule['id'], ''))
+    final, promotion_id, group_name = min(candidates, key=lambda x: x[0], default=(int(gross), None, ''))
+    return {'base_total': int(gross), 'total': final, 'discount': int(gross) - final, 'promotion_id': promotion_id, 'group_name': group_name}
 
 
 def save_promotion(data):
@@ -181,7 +196,7 @@ def quote(data):
         item = db.execute('SELECT * FROM products WHERE id=?', (product,)).fetchone()
         if item is None:
             raise ValueError('Товар не найден')
-        return current_price(db, item, branch, qty)
+        return current_price(db, item, branch, qty, int(data['customer_id']) if data.get('customer_id') else None)
 
 
 def mutate(data):
@@ -222,13 +237,15 @@ def mutate(data):
         note = str(data.get('note', 'ДЕМО'))[:150]
         db.execute('INSERT INTO movements(created_at,branch_id,product_id,kind,qty,unit_cost,note) VALUES(?,?,?,?,?,?,?)', (now, branch, product, kind, qty, cost, note))
         if kind == 'Продажа':
-            pricing = current_price(db, item, branch, qty)
+            pricing = current_price(db, item, branch, qty, customer_id)
             total = pricing['total']
             earned = int((Decimal(total) * Decimal('0.03')).quantize(Decimal('1'), rounding=ROUND_HALF_UP)) if customer_id else 0
             cur = db.execute('INSERT INTO sales(request_id,created_at,branch_id,product_id,customer_id,qty,total,earned,base_total,discount,promotion_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
                              (request_id, now, branch, product, customer_id, qty, total, earned, pricing['base_total'], pricing['discount'], pricing['promotion_id']))
             if customer_id:
                 db.execute('UPDATE customers SET points=points+? WHERE id=?', (earned, customer_id))
+                spend = db.execute('SELECT COALESCE(SUM(total),0) value, COUNT(*) count FROM sales WHERE customer_id=?', (customer_id,)).fetchone()
+                db.execute('UPDATE customers SET group_id=(SELECT id FROM customer_groups WHERE active=1 AND min_spent<=? AND min_purchases<=? ORDER BY discount_pct DESC LIMIT 1) WHERE id=?', (spend['value'], spend['count'], customer_id))
             return {'sale_id': cur.lastrowid, 'total': total, 'earned': earned, 'discount': pricing['discount'], 'promotion_id': pricing['promotion_id']}
         return {'ok': True}
 
