@@ -195,7 +195,10 @@ def save_customer(data):
         if not db.execute('SELECT 1 FROM customer_groups WHERE id=? AND active=1',(group,)).fetchone():
             raise ValueError('Группа не найдена')
         try:
-            cid=db.execute('INSERT INTO customers(name,phone,points,group_id) VALUES(?,?,0,?)',(name,phone,group)).lastrowid
+            if data.get('id'):
+                cid=int(data['id']); db.execute('UPDATE customers SET name=?, phone=?, group_id=? WHERE id=?',(name,phone,group,cid))
+            else:
+                cid=db.execute('INSERT INTO customers(name,phone,points,group_id) VALUES(?,?,0,?)',(name,phone,group)).lastrowid
         except sqlite3.IntegrityError:
             raise ValueError('Клиент с таким телефоном уже есть')
         return {'customer_id':cid}
@@ -208,6 +211,28 @@ def save_group(data):
         if not db.execute('SELECT 1 FROM customer_groups WHERE id=?',(gid,)).fetchone(): raise ValueError('Группа не найдена')
         db.execute('UPDATE customer_groups SET name=?,discount_pct=?,min_spent=?,min_purchases=? WHERE id=?',(name,float(pct),spent,purchases,gid))
         return {'group_id':gid}
+
+def save_product(data):
+    pid=int(data.get('id') or 0); name=str(data.get('name','')).strip(); price=int(data.get('price') or 0)
+    if not pid or not name or price<0: raise ValueError('Проверьте товар и цену')
+    with connect() as db:
+        if not db.execute('SELECT 1 FROM products WHERE id=?',(pid,)).fetchone(): raise ValueError('Товар не найден')
+        db.execute('UPDATE products SET name=?, price=? WHERE id=?',(name,price,pid))
+    return {'product_id':pid}
+
+def save_employee(data):
+    eid=int(data.get('id') or 0); name=str(data.get('name','')).strip(); role=str(data.get('role','')).strip()
+    if not eid or not name or not role: raise ValueError('Проверьте сотрудника')
+    with connect() as db:
+        db.execute('UPDATE employees SET name=?, role=? WHERE id=?',(name,role,eid))
+    return {'employee_id':eid}
+
+def save_supplier(data):
+    sid=int(data.get('id') or 0); name=str(data.get('name','')).strip(); category=str(data.get('category','')).strip()
+    if not sid or not name or not category: raise ValueError('Проверьте поставщика')
+    with connect() as db:
+        db.execute('UPDATE suppliers SET name=?, category=? WHERE id=?',(name,category,sid))
+    return {'supplier_id':sid}
 
 
 def quote(data):
@@ -306,14 +331,14 @@ class Handler(BaseHTTPRequestHandler):
             self.send(404, {'error': 'Не найдено'})
 
     def do_POST(self):
-        if self.path not in ('/api/operation', '/api/promotions', '/api/quote', '/api/customers', '/api/groups'):
+        if self.path not in ('/api/operation', '/api/promotions', '/api/quote', '/api/customers', '/api/groups', '/api/products', '/api/employees', '/api/suppliers'):
             return self.send(404, {'error': 'Не найдено'})
         try:
             size = int(self.headers.get('Content-Length', '0'))
             if size < 1 or size > 10000:
                 raise ValueError('Неверный размер запроса')
             data = json.loads(self.rfile.read(size))
-            action = save_promotion if self.path == '/api/promotions' else save_customer if self.path == '/api/customers' else save_group if self.path == '/api/groups' else quote if self.path == '/api/quote' else mutate
+            action = save_promotion if self.path == '/api/promotions' else save_customer if self.path == '/api/customers' else save_group if self.path == '/api/groups' else save_product if self.path == '/api/products' else save_employee if self.path == '/api/employees' else save_supplier if self.path == '/api/suppliers' else quote if self.path == '/api/quote' else mutate
             self.send(200, action(data))
         except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
             self.send(400, {'error': str(exc)})
